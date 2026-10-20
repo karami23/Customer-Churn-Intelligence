@@ -1,0 +1,19 @@
+# Python virtual environment
+Lib/
+Scripts/
+etc/
+pyvenv.cfg
+
+# Python cache
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+
+# Secrets
+.env
+
+# Local datasets
+data/
