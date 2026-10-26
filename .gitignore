@@ -1,19 +1,59 @@
-# Python virtual environment
-Lib/
-Scripts/
-etc/
-pyvenv.cfg
-
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
-.ipynb_checkpoints/
+*.pyd
 
-# IDE
-.idea/
+# Virtual environments
+.venv/
+venv/
+env/
 
 # Secrets
 .env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Test and cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Local datasets
 data/
+datasets/
+
+# Keep Artifacts tracked (including joblib models)
+# Virtual environment
+/Lib/
+/Scripts/
+/etc/
+/pyvenv.cfg
+/include/
+/share/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
