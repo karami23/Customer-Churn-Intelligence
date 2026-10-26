@@ -28,7 +28,7 @@ Thumbs.db
 *.log
 *.tmp
 
-# Test and cache
+# Test and type-checking caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -37,24 +37,10 @@ Thumbs.db
 data/
 datasets/
 
-# Keep Artifacts tracked (including joblib models)
-# Virtual environment
+# Jupyter installation files
+/share/
 /Lib/
 /Scripts/
 /etc/
 /pyvenv.cfg
 /include/
-/share/
-
-# Python
-__pycache__/
-*.py[cod]
-
-# Secrets
-.env
-.env.*
-!.env.example
-
-# Jupyter
-.ipynb_checkpoints/
-.env
