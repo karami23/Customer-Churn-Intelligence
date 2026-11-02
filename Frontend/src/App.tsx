@@ -1,4 +1,13 @@
 import { useEffect, useState } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
+import Analytics from "./components/Analytics";
+import PredictionHistory from "./components/PredictionHistory";
+import PredictionForm from "./components/PredictionForm";
 import Sidebar from "./components/Sidebar";
 import { getDashboardSummary } from "./lib/api";
 import "./App.css";
@@ -11,7 +20,7 @@ interface DashboardSummary {
   average_churn_probability: number;
 }
 
-export default function App() {
+function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -81,96 +90,179 @@ export default function App() {
   );
 
   return (
+    <main className="main-content">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
+          <h1>Dashboard Overview</h1>
+          <p>Monitor customer churn and explore predictive insights.</p>
+        </div>
+
+        <div className="header-status">
+          <span className="status-dot" />
+          ML Platform
+        </div>
+      </header>
+
+      <section className="welcome-panel">
+        <div>
+          <span className="panel-label">PREDICTIVE INTELLIGENCE</span>
+          <h2>Understand your customers.</h2>
+          <p>
+            Turn customer data into actionable churn insights. Identify
+            risk patterns and make data-driven decisions.
+          </p>
+        </div>
+      </section>
+
+      {apiError && (
+        <div className="error-banner" role="alert">
+          <strong>Connection error</strong>
+          <p>{apiError}</p>
+        </div>
+      )}
+
+      <section className="stats-grid" aria-label="Dashboard statistics">
+        {stats.map((stat) => (
+          <article className="stat-card" key={stat.label}>
+            <span className="stat-label">{stat.label}</span>
+
+            <strong className="stat-value">
+              {loading ? "Loading..." : stat.value}
+            </strong>
+
+            <span className="stat-description">{stat.description}</span>
+          </article>
+        ))}
+      </section>
+
+      <section className="overview-panel">
+        <div>
+          <span className="panel-label">ANALYTICS</span>
+          <h2>Prediction Overview</h2>
+          <p>Distribution of the current prediction history.</p>
+        </div>
+
+        {loading ? (
+          <p>Loading prediction statistics...</p>
+        ) : summary ? (
+          <>
+            <div className="distribution-row">
+              <span>Predicted churn</span>
+              <strong>{churnPercentage.toFixed(1)}%</strong>
+            </div>
+
+            <div
+              className="distribution-track"
+              role="progressbar"
+              aria-label="Predicted churn percentage"
+              aria-valuenow={churnPercentage}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className="distribution-fill"
+                style={{ width: `${churnPercentage}%` }}
+              />
+            </div>
+
+            <p className="distribution-caption">
+              {summary.predicted_churn.toLocaleString()} customers predicted
+              to churn out of {summary.total_predictions.toLocaleString()}{" "}
+              total predictions.
+            </p>
+          </>
+        ) : (
+          <p>Prediction statistics are currently unavailable.</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+interface PlaceholderPageProps {
+  title: string;
+  description: string;
+}
+
+function PlaceholderPage({
+  title,
+  description,
+}: PlaceholderPageProps) {
+  return (
+    <main className="main-content">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
+          <h1>{title}</h1>
+          <p>{description}</p>
+        </div>
+
+        <div className="header-status">
+          <span className="status-dot" />
+          ML Platform
+        </div>
+      </header>
+
+      <section className="overview-panel">
+        <span className="panel-label">COMING NEXT</span>
+        <h2>{title}</h2>
+        <p>
+          This section is ready for implementation. We will connect it
+          to the backend in the next steps.
+        </p>
+      </section>
+    </main>
+  );
+}
+
+function AppLayout() {
+  return (
     <div className="app-layout">
       <Sidebar />
 
-      <main className="main-content">
-        <header className="page-header">
-          <div>
-            <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
-            <h1>Dashboard Overview</h1>
-            <p>Monitor customer churn and explore predictive insights.</p>
-          </div>
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
 
-          <div className="header-status">
-            <span className="status-dot" />
-            ML Platform
-          </div>
-        </header>
+        <Route
+          path="/customers"
+          element={
+            <PlaceholderPage
+              title="Customers"
+              description="Explore customer information and profiles."
+            />
+          }
+        />
 
-        <section className="welcome-panel">
-          <div>
-            <span className="panel-label">PREDICTIVE INTELLIGENCE</span>
-            <h2>Understand your customers.</h2>
-            <p>
-              Turn customer data into actionable churn insights. Identify
-              risk patterns and make data-driven decisions.
-            </p>
-          </div>
-        </section>
+        <Route path="/predict" element={<PredictionForm />} />
 
-        {apiError && (
-          <div className="error-banner" role="alert">
-            <strong>Connection error</strong>
-            <p>{apiError}</p>
-          </div>
-        )}
+        <Route
+          path="/predictions"
+          element={<PredictionHistory />}
+        />
 
-        <section className="stats-grid" aria-label="Dashboard statistics">
-          {stats.map((stat) => (
-            <article className="stat-card" key={stat.label}>
-              <span className="stat-label">{stat.label}</span>
+        <Route path="/analytics" element={<Analytics />} />
 
-              <strong className="stat-value">
-                {loading ? "Loading..." : stat.value}
-              </strong>
+        <Route
+          path="/settings"
+          element={
+            <PlaceholderPage
+              title="Settings"
+              description="Manage application preferences."
+            />
+          }
+        />
 
-              <span className="stat-description">{stat.description}</span>
-            </article>
-          ))}
-        </section>
-
-        <section className="overview-panel">
-          <div>
-            <span className="panel-label">ANALYTICS</span>
-            <h2>Prediction Overview</h2>
-            <p>Distribution of the current prediction history.</p>
-          </div>
-
-          {loading ? (
-            <p>Loading prediction statistics...</p>
-          ) : summary ? (
-            <>
-              <div className="distribution-row">
-                <span>Predicted churn</span>
-                <strong>{churnPercentage.toFixed(1)}%</strong>
-              </div>
-
-              <div
-                className="distribution-track"
-                role="progressbar"
-                aria-label="Predicted churn percentage"
-                aria-valuenow={churnPercentage}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              >
-                <div
-                  className="distribution-fill"
-                  style={{ width: `${churnPercentage}%` }}
-                />
-              </div>
-
-              <p className="distribution-caption">
-                {summary.predicted_churn.toLocaleString()} customers predicted
-                to churn out of {summary.total_predictions.toLocaleString()}{" "}
-                total predictions.
-              </p>
-            </>
-          ) : (
-            <p>Prediction statistics are currently unavailable.</p>
-          )}
-        </section>
-      </main>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppLayout />
+    </BrowserRouter>
   );
 }
