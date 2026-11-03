@@ -5,20 +5,24 @@ import {
   Route,
   Navigate,
 } from "react-router-dom";
+import Settings from "./components/Settings";
+
 import Analytics from "./components/Analytics";
+import Customers from "./components/Customers";
 import PredictionHistory from "./components/PredictionHistory";
 import PredictionForm from "./components/PredictionForm";
 import Sidebar from "./components/Sidebar";
-import { getDashboardSummary } from "./lib/api";
+
+import {
+  getDashboardSummary,
+  type DashboardSummary,
+} from "./lib/api";
+
 import "./App.css";
 
-interface DashboardSummary {
-  total_predictions: number;
-  predicted_churn: number;
-  predicted_no_churn: number;
-  predicted_churn_percentage: number;
-  average_churn_probability: number;
-}
+// ==========================================
+// Dashboard Page
+// ==========================================
 
 function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -30,18 +34,20 @@ function DashboardPage() {
 
     async function loadDashboard() {
       try {
-        const data = (await getDashboardSummary()) as DashboardSummary;
+        setLoading(true);
+        setApiError(null);
+
+        const data = await getDashboardSummary();
 
         if (isMounted) {
           setSummary(data);
-          setApiError(null);
         }
       } catch (error) {
         console.error("Failed to load dashboard summary:", error);
 
         if (isMounted) {
           setApiError(
-            "Unable to load dashboard statistics. Check that the FastAPI backend is running and the API endpoint is correct."
+            "Unable to load dashboard statistics. Please check that the backend is running."
           );
         }
       } finally {
@@ -58,36 +64,40 @@ function DashboardPage() {
     };
   }, []);
 
+  const totalPredictions = summary?.total_predictions ?? 0;
+  const churnPredictions = summary?.churn_predictions ?? 0;
+  const nonChurnPredictions = summary?.non_churn_predictions ?? 0;
+
+  const churnPercentage =
+    totalPredictions > 0
+      ? (churnPredictions / totalPredictions) * 100
+      : 0;
+
+  const averageProbability =
+    (summary?.average_churn_probability ?? 0) * 100;
+
   const stats = [
     {
       label: "Total Predictions",
-      value: summary?.total_predictions.toLocaleString() ?? "—",
+      value: totalPredictions.toLocaleString(),
       description: "All analyzed customers",
     },
     {
       label: "Predicted Churn",
-      value: summary?.predicted_churn.toLocaleString() ?? "—",
+      value: churnPredictions.toLocaleString(),
       description: "Customers predicted to leave",
     },
     {
       label: "Retained Customers",
-      value: summary?.predicted_no_churn.toLocaleString() ?? "—",
+      value: nonChurnPredictions.toLocaleString(),
       description: "Customers predicted to stay",
     },
     {
       label: "Average Churn Probability",
-      value:
-        summary != null
-          ? `${(summary.average_churn_probability * 100).toFixed(1)}%`
-          : "—",
+      value: `${averageProbability.toFixed(1)}%`,
       description: "Average model probability",
     },
   ];
-
-  const churnPercentage = Math.min(
-    100,
-    Math.max(0, summary?.predicted_churn_percentage ?? 0)
-  );
 
   return (
     <main className="main-content">
@@ -95,7 +105,9 @@ function DashboardPage() {
         <div>
           <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
           <h1>Dashboard Overview</h1>
-          <p>Monitor customer churn and explore predictive insights.</p>
+          <p>
+            Monitor customer churn and explore predictive insights.
+          </p>
         </div>
 
         <div className="header-status">
@@ -106,11 +118,15 @@ function DashboardPage() {
 
       <section className="welcome-panel">
         <div>
-          <span className="panel-label">PREDICTIVE INTELLIGENCE</span>
+          <span className="panel-label">
+            PREDICTIVE INTELLIGENCE
+          </span>
+
           <h2>Understand your customers.</h2>
+
           <p>
-            Turn customer data into actionable churn insights. Identify
-            risk patterns and make data-driven decisions.
+            Turn customer data into actionable churn insights.
+            Identify risk patterns and make data-driven decisions.
           </p>
         </div>
       </section>
@@ -122,16 +138,21 @@ function DashboardPage() {
         </div>
       )}
 
-      <section className="stats-grid" aria-label="Dashboard statistics">
+      <section
+        className="stats-grid"
+        aria-label="Dashboard statistics"
+      >
         {stats.map((stat) => (
           <article className="stat-card" key={stat.label}>
             <span className="stat-label">{stat.label}</span>
 
             <strong className="stat-value">
-              {loading ? "Loading..." : stat.value}
+              {loading ? "Loading..." : apiError ? "—" : stat.value}
             </strong>
 
-            <span className="stat-description">{stat.description}</span>
+            <span className="stat-description">
+              {stat.description}
+            </span>
           </article>
         ))}
       </section>
@@ -140,12 +161,16 @@ function DashboardPage() {
         <div>
           <span className="panel-label">ANALYTICS</span>
           <h2>Prediction Overview</h2>
-          <p>Distribution of the current prediction history.</p>
+          <p>
+            Distribution of the current prediction history.
+          </p>
         </div>
 
         {loading ? (
           <p>Loading prediction statistics...</p>
-        ) : summary ? (
+        ) : apiError || !summary ? (
+          <p>Prediction statistics are currently unavailable.</p>
+        ) : (
           <>
             <div className="distribution-row">
               <span>Predicted churn</span>
@@ -162,59 +187,36 @@ function DashboardPage() {
             >
               <div
                 className="distribution-fill"
-                style={{ width: `${churnPercentage}%` }}
+                style={{
+                  width: `${churnPercentage}%`,
+                }}
               />
             </div>
 
             <p className="distribution-caption">
-              {summary.predicted_churn.toLocaleString()} customers predicted
-              to churn out of {summary.total_predictions.toLocaleString()}{" "}
-              total predictions.
+              {churnPredictions.toLocaleString()} customers predicted
+              to churn out of{" "}
+              {totalPredictions.toLocaleString()} total predictions.
             </p>
           </>
-        ) : (
-          <p>Prediction statistics are currently unavailable.</p>
         )}
       </section>
     </main>
   );
 }
 
-interface PlaceholderPageProps {
-  title: string;
-  description: string;
-}
+// ==========================================
+// Settings Placeholder
+// ==========================================
 
-function PlaceholderPage({
-  title,
-  description,
-}: PlaceholderPageProps) {
-  return (
-    <main className="main-content">
-      <header className="page-header">
-        <div>
-          <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
-          <h1>{title}</h1>
-          <p>{description}</p>
-        </div>
+<Route
+  path="/settings"
+  element={<Settings />}
+/>
 
-        <div className="header-status">
-          <span className="status-dot" />
-          ML Platform
-        </div>
-      </header>
-
-      <section className="overview-panel">
-        <span className="panel-label">COMING NEXT</span>
-        <h2>{title}</h2>
-        <p>
-          This section is ready for implementation. We will connect it
-          to the backend in the next steps.
-        </p>
-      </section>
-    </main>
-  );
-}
+// ==========================================
+// Application Layout
+// ==========================================
 
 function AppLayout() {
   return (
@@ -226,38 +228,41 @@ function AppLayout() {
 
         <Route
           path="/customers"
-          element={
-            <PlaceholderPage
-              title="Customers"
-              description="Explore customer information and profiles."
-            />
-          }
+          element={<Customers />}
         />
 
-        <Route path="/predict" element={<PredictionForm />} />
+        <Route
+          path="/predict"
+          element={<PredictionForm />}
+        />
 
         <Route
           path="/predictions"
           element={<PredictionHistory />}
         />
 
-        <Route path="/analytics" element={<Analytics />} />
+        <Route
+          path="/analytics"
+          element={<Analytics />}
+        />
 
         <Route
           path="/settings"
-          element={
-            <PlaceholderPage
-              title="Settings"
-              description="Manage application preferences."
-            />
-          }
+          element={<Settings />}
         />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
+        />
       </Routes>
     </div>
   );
 }
+
+// ==========================================
+// Root Application
+// ==========================================
 
 export default function App() {
   return (

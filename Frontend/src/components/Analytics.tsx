@@ -1,228 +1,422 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useEffect, useState } from "react";
+import {
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  Legend,
+  Line,
+  LineChart,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+} from "recharts";
+
 import {
   getDashboardSummary,
   getRiskDistribution,
-  getPredictionTrend,
+  getPredictionHistory,
   type DashboardSummary,
-  type RiskDistribution,
-  type PredictionTrend,
+  type RiskDistributionItem,
+  type PredictionHistoryItem,
 } from "../lib/api";
-import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  Legend,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-} from "recharts";
 
-const RISK_COLORS: Record<string, string> = {
+// ==========================================
+// Constants
+// ==========================================
+
+const COLORS = {
   Low: "#22c55e",
   Medium: "#f59e0b",
   High: "#ef4444",
 };
 
+const cardStyle: React.CSSProperties = {
+  background: "var(--card-bg, #ffffff)",
+  border: "1px solid var(--border-color, #e5e7eb)",
+  borderRadius: "14px",
+  padding: "22px",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+  minWidth: 0,
+  boxSizing: "border-box",
+};
+
+const titleStyle: React.CSSProperties = {
+  fontSize: "14px",
+  color: "var(--muted-text, #64748b)",
+  marginBottom: "12px",
+};
+
+const valueStyle: React.CSSProperties = {
+  fontSize: "28px",
+  fontWeight: 700,
+  color: "var(--text-color, #0f172a)",
+};
+
+const chartTitleStyle: React.CSSProperties = {
+  fontSize: "17px",
+  fontWeight: 600,
+  color: "var(--text-color, #0f172a)",
+  margin: 0,
+};
+
+const buttonStyle: React.CSSProperties = {
+  border: "1px solid var(--border-color, #cbd5e1)",
+  background: "var(--card-bg, #ffffff)",
+  color: "var(--text-color, #334155)",
+  borderRadius: "8px",
+  padding: "9px 14px",
+  cursor: "pointer",
+  fontWeight: 500,
+};
+
+const selectStyle: React.CSSProperties = {
+  border: "1px solid var(--border-color, #cbd5e1)",
+  background: "var(--card-bg, #ffffff)",
+  color: "var(--text-color, #334155)",
+  borderRadius: "8px",
+  padding: "9px 12px",
+  cursor: "pointer",
+  minWidth: "145px",
+};
+
+// ==========================================
+// Analytics Component
+// ==========================================
+
 export default function Analytics() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [risks, setRisks] = useState<RiskDistribution | null>(null);
-  const [trend, setTrend] = useState<PredictionTrend | null>(null);
-  const [days, setDays] = useState(30);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  async function loadAnalytics(selectedDays: number) {
+  const [risks, setRisks] = useState<RiskDistributionItem[]>([]);
+
+  const [history, setHistory] = useState<PredictionHistoryItem[]>([]);
+
+  const [days, setDays] = useState(30);
+
+  const [loading, setLoading] = useState(true);
+
+  const [error, setError] = useState("");
+
+  // ==========================================
+  // Load Analytics Data
+  // ==========================================
+
+  const loadAnalytics = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
+      setError("");
 
-      const [summaryData, riskData, trendData] = await Promise.all([
+      const [summaryData, riskData, historyData] = await Promise.all([
         getDashboardSummary(),
         getRiskDistribution(),
-        getPredictionTrend(selectedDays),
+        getPredictionHistory({
+          skip: 0,
+          limit: 100,
+        }),
       ]);
 
       setSummary(summaryData);
+
       setRisks(riskData);
-      setTrend(trendData);
+
+      setHistory(Array.isArray(historyData) ? historyData : []);
+
+      console.log("Analytics history:", historyData);
     } catch (err) {
+      console.error("Analytics loading error:", err);
+
       setError(
         err instanceof Error
           ? err.message
-          : "Failed to load analytics"
+          : "Failed to load analytics data."
       );
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    void loadAnalytics(days);
-  }, [days]);
+    void loadAnalytics();
+  }, [loadAnalytics]);
 
-  const riskData = risks
-    ? [
-        { name: "Low", value: risks.Low },
-        { name: "Medium", value: risks.Medium },
-        { name: "High", value: risks.High },
-      ]
-    : [];
+  // ==========================================
+  // Summary Calculations
+  // ==========================================
+
+  const totalPredictions = summary?.total_predictions ?? 0;
+
+  const churnPredictions = summary?.churn_predictions ?? 0;
+
+  const nonChurnPredictions = summary?.non_churn_predictions ?? 0;
+
+  const churnPercentage =
+    totalPredictions > 0
+      ? (churnPredictions / totalPredictions) * 100
+      : 0;
+
+  const averageProbability =
+    (summary?.average_churn_probability ?? 0) * 100;
+
+  // ==========================================
+  // Risk Distribution Data
+  // ==========================================
+
+  const riskData = (["Low", "Medium", "High"] as const).map((level) => ({
+    name: level,
+    value: Number(
+      risks.find((item) => item.risk_level === level)?.count ?? 0
+    ),
+    fill: COLORS[level],
+  }));
+
+  // ==========================================
+  // Prediction Trend Data
+  // Build chart directly from prediction history
+  // ==========================================
+
+  const chartData = useMemo(() => {
+    const dateMap = new Map<
+      string,
+      {
+        date: string;
+        total_predictions: number;
+        churn_predictions: number;
+      }
+    >();
+
+    const today = new Date();
+
+    // Create one entry for every day in selected period.
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(today);
+
+      date.setHours(12, 0, 0, 0);
+      date.setDate(today.getDate() - i);
+
+      const dateKey = [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, "0"),
+        String(date.getDate()).padStart(2, "0"),
+      ].join("-");
+
+      dateMap.set(dateKey, {
+        date: dateKey,
+        total_predictions: 0,
+        churn_predictions: 0,
+      });
+    }
+
+    // Add actual prediction records.
+    history.forEach((item) => {
+      const createdAt = new Date(item.created_at);
+
+      if (Number.isNaN(createdAt.getTime())) {
+        return;
+      }
+
+      const dateKey = [
+        createdAt.getFullYear(),
+        String(createdAt.getMonth() + 1).padStart(2, "0"),
+        String(createdAt.getDate()).padStart(2, "0"),
+      ].join("-");
+
+      const dayData = dateMap.get(dateKey);
+
+      if (!dayData) {
+        return;
+      }
+
+      dayData.total_predictions += 1;
+
+      if (item.prediction === "Yes") {
+        dayData.churn_predictions += 1;
+      }
+    });
+
+    return Array.from(dateMap.values());
+  }, [history, days]);
+
+  // ==========================================
+  // Loading State
+  // ==========================================
 
   if (loading && !summary) {
     return (
-      <main className="main-content">
-        <header className="page-header">
-          <div>
-            <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
-            <h1>Analytics</h1>
-            <p>Understand customer churn patterns and prediction trends.</p>
-          </div>
-        </header>
-        <section className="overview-panel">
-          <p>Loading analytics...</p>
-        </section>
+      <main className="main-content analytics-page">
+        <div className="analytics-loading">
+          Loading analytics...
+        </div>
       </main>
     );
   }
+
+  // ==========================================
+  // Error State
+  // ==========================================
 
   if (error && !summary) {
     return (
-      <main className="main-content">
-        <header className="page-header">
-          <div>
-            <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
-            <h1>Analytics</h1>
-            <p>Understand customer churn patterns and prediction trends.</p>
-          </div>
-        </header>
-        <section className="overview-panel">
-          <div className="prediction-error" role="alert">
-            <strong>Unable to load analytics</strong>
-            <p>{error}</p>
-            <button
-              className="prediction-submit"
-              type="button"
-              onClick={() => void loadAnalytics(days)}
-            >
-              Try Again
-            </button>
-          </div>
-        </section>
+      <main className="main-content analytics-page">
+        <div style={{ ...cardStyle, color: "#dc2626" }}>
+          <p>{error}</p>
+
+          <button
+            type="button"
+            onClick={() => void loadAnalytics()}
+            style={buttonStyle}
+          >
+            Try again
+          </button>
+        </div>
       </main>
     );
   }
 
+  // ==========================================
+  // Main UI
+  // ==========================================
+
   return (
     <main className="main-content analytics-page">
-      <header className="page-header">
+
+      {/* Page Header */}
+
+      <header className="analytics-header">
         <div>
-          <span className="eyebrow">CUSTOMER INTELLIGENCE</span>
-          <h1>Analytics</h1>
-          <p>Understand customer churn patterns and prediction trends.</p>
+          <h1>Analytics Overview</h1>
+
+          <p>
+            Monitor customer churn predictions and risk distribution.
+          </p>
         </div>
 
         <button
-          className="prediction-submit"
           type="button"
-          onClick={() => void loadAnalytics(days)}
+          onClick={() => void loadAnalytics()}
+          style={buttonStyle}
           disabled={loading}
         >
           {loading ? "Refreshing..." : "Refresh"}
         </button>
       </header>
 
+      {/* Error Message */}
+
       {error && (
-        <div className="prediction-error" role="alert">
-          <p>{error}</p>
+        <div
+          style={{
+            ...cardStyle,
+            color: "#dc2626",
+            marginBottom: "20px",
+          }}
+        >
+          {error}
         </div>
       )}
 
-      <section className="analytics-stats">
-        <article className="analytics-stat-card">
-          <span>Total Predictions</span>
-          <strong>{summary?.total_predictions ?? 0}</strong>
-          <small>All recorded predictions</small>
-        </article>
+      {/* Summary Cards */}
 
-        <article className="analytics-stat-card">
-          <span>Predicted Churn</span>
-          <strong>{summary?.predicted_churn ?? 0}</strong>
-          <small>
-            {summary?.predicted_churn_percentage ?? 0}% of predictions
+      <section className="analytics-summary-grid">
+
+        <div style={cardStyle}>
+          <p style={titleStyle}>Total Predictions</p>
+
+          <p style={valueStyle}>
+            {totalPredictions.toLocaleString()}
+          </p>
+        </div>
+
+        <div style={cardStyle}>
+          <p style={titleStyle}>Predicted Churn</p>
+
+          <p style={{ ...valueStyle, color: "#ef4444" }}>
+            {churnPredictions.toLocaleString()}
+          </p>
+
+          <small style={{ color: "var(--muted-text, #64748b)" }}>
+            {churnPercentage.toFixed(1)}% of all predictions
           </small>
-        </article>
+        </div>
 
-        <article className="analytics-stat-card">
-          <span>No Churn</span>
-          <strong>{summary?.predicted_no_churn ?? 0}</strong>
-          <small>Predicted to stay</small>
-        </article>
+        <div style={cardStyle}>
+          <p style={titleStyle}>Predicted No Churn</p>
 
-        <article className="analytics-stat-card">
-          <span>Average Churn Probability</span>
-          <strong>
-            {((summary?.average_churn_probability ?? 0) * 100).toFixed(1)}%
-          </strong>
-          <small>Average model probability</small>
-        </article>
+          <p style={{ ...valueStyle, color: "#22c55e" }}>
+            {nonChurnPredictions.toLocaleString()}
+          </p>
+        </div>
+
+        <div style={cardStyle}>
+          <p style={titleStyle}>Average Churn Probability</p>
+
+          <p style={valueStyle}>
+            {averageProbability.toFixed(1)}%
+          </p>
+        </div>
+
       </section>
 
-      <section className="analytics-charts">
-        <article className="overview-panel analytics-chart-panel">
-          <div className="analytics-panel-heading">
-            <div>
-              <span className="panel-label">RISK DISTRIBUTION</span>
-              <h2>Customer Risk Levels</h2>
-            </div>
-          </div>
+      {/* Charts */}
+
+      <section className="analytics-charts-grid">
+
+        {/* Risk Distribution */}
+
+        <div style={cardStyle}>
+          <h3 style={chartTitleStyle}>
+            Risk Distribution
+          </h3>
 
           {riskData.every((item) => item.value === 0) ? (
-            <p className="history-message">No risk data available yet.</p>
+            <EmptyState message="No risk data available yet." />
           ) : (
-            <div className="analytics-pie-wrapper">
-              <ResponsiveContainer width="100%" height={300}>
+            <div className="analytics-chart-container">
+              <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={riskData}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
-                    cy="50%"
-                    innerRadius={65}
-                    outerRadius={100}
-                    paddingAngle={4}
+                    cy="45%"
+                    outerRadius="72%"
+                    paddingAngle={3}
+                    label={({ name, percent }) =>
+                      `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
+                    }
                   >
                     {riskData.map((entry) => (
                       <Cell
                         key={entry.name}
-                        fill={RISK_COLORS[entry.name]}
+                        fill={entry.fill}
                       />
                     ))}
                   </Pie>
+
                   <Tooltip />
+
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
             </div>
           )}
-        </article>
+        </div>
 
-        <article className="overview-panel analytics-chart-panel">
-          <div className="analytics-panel-heading analytics-trend-heading">
-            <div>
-              <span className="panel-label">PREDICTION ACTIVITY</span>
-              <h2>Prediction Trend</h2>
-            </div>
+        {/* Prediction Trend */}
+
+        <div style={cardStyle}>
+
+          <div className="analytics-trend-header">
+            <h3 style={chartTitleStyle}>
+              Prediction Trend
+            </h3>
 
             <select
-              className="analytics-days-select"
               value={days}
               onChange={(event) => setDays(Number(event.target.value))}
+              style={selectStyle}
               aria-label="Select trend period"
             >
               <option value={7}>Last 7 days</option>
@@ -233,42 +427,107 @@ export default function Analytics() {
             </select>
           </div>
 
-          {!trend || trend.data.length === 0 ? (
-            <p className="history-message">No trend data available for this period.</p>
+          {history.length === 0 ? (
+            <EmptyState message="No prediction history available yet." />
           ) : (
-            <div className="analytics-line-wrapper">
-              <ResponsiveContainer width="100%" height={300}>
+            <div className="analytics-chart-container">
+              <ResponsiveContainer width="100%" height="100%">
                 <LineChart
-                  data={trend.data}
-                  margin={{ top: 10, right: 15, left: 0, bottom: 5 }}
+                  data={chartData}
+                  margin={{
+                    top: 15,
+                    right: 20,
+                    left: 0,
+                    bottom: 5,
+                  }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#e2e8f0"
+                  />
+
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 11, fill: "#64748b" }}
+                    tickLine={false}
+                    axisLine={{ stroke: "#cbd5e1" }}
+                    minTickGap={20}
+                    tickFormatter={(value: string) => {
+                      const date = new Date(`${value}T12:00:00`);
+
+                      return date.toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      });
+                    }}
+                  />
+
+                  <YAxis
+                    allowDecimals={false}
+                    domain={[0, "auto"]}
+                    tick={{ fontSize: 11, fill: "#64748b" }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={35}
+                  />
+
+                  <Tooltip
+                    labelFormatter={(value) => {
+                      const date = new Date(`${value}T12:00:00`);
+
+                      return date.toLocaleDateString("en-US", {
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
+                      });
+                    }}
+                  />
+
                   <Legend />
+
                   <Line
                     type="monotone"
                     dataKey="total_predictions"
                     name="Total Predictions"
                     stroke="#6366f1"
-                    strokeWidth={3}
+                    strokeWidth={2.5}
                     dot={{ r: 4 }}
+                    activeDot={{ r: 7 }}
+                    connectNulls
                   />
+
                   <Line
                     type="monotone"
-                    dataKey="predicted_churn"
-                    name="Predicted Churn"
+                    dataKey="churn_predictions"
+                    name="Churn Predictions"
                     stroke="#ef4444"
-                    strokeWidth={3}
+                    strokeWidth={2.5}
                     dot={{ r: 4 }}
+                    activeDot={{ r: 7 }}
+                    connectNulls
                   />
+
                 </LineChart>
               </ResponsiveContainer>
             </div>
           )}
-        </article>
+
+        </div>
+
       </section>
+
     </main>
+  );
+}
+
+// ==========================================
+// Empty State
+// ==========================================
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="analytics-empty-state">
+      {message}
+    </div>
   );
 }

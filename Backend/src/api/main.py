@@ -1,25 +1,20 @@
-
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from src.api.database import Base, engine
-from src import models
-from src.api.routes.predictions import router as predictions_router
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    yield
+from src.api.routes import customers as customers_router
+from src.api.routes import predictions as predictions_router
 
 
 app = FastAPI(
     title="Customer Churn Intelligence API",
-    lifespan=lifespan,
+    description=(
+        "Customer Churn Prediction "
+        "and Analytics API"
+    ),
+    version="1.0.0",
 )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,14 +31,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(predictions_router)
+
+app.include_router(
+    predictions_router.router
+)
+
+app.include_router(
+    customers_router.router
+)
 
 
-@app.get("/", include_in_schema=False)
+@app.get(
+    "/",
+    include_in_schema=False,
+)
 def root():
-    return RedirectResponse(url="/docs")
+
+    return RedirectResponse(
+        url="/docs"
+    )
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+
+    return {
+        "status": "healthy"
+    }
