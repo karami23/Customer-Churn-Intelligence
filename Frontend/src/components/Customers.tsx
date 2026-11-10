@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createCustomer,
@@ -6,36 +7,11 @@ import {
   getCustomerPredictions,
   getCustomers,
   type Customer,
-  type CustomerCreateInput,
-  type CustomerData,
   type CustomerDetail,
   type PredictionHistoryItem,
 } from "../lib/api";
 
 const PAGE_SIZE = 10;
-
-const EMPTY_CUSTOMER: CustomerCreateInput = {
-  customer_code: "",
-  gender: "Female",
-  SeniorCitizen: 0,
-  Partner: "Yes",
-  Dependents: "No",
-  tenure: 12,
-  PhoneService: "Yes",
-  MultipleLines: "No",
-  InternetService: "DSL",
-  OnlineSecurity: "No",
-  OnlineBackup: "No",
-  DeviceProtection: "No",
-  TechSupport: "No",
-  StreamingTV: "No",
-  StreamingMovies: "No",
-  Contract: "Month-to-month",
-  PaperlessBilling: "Yes",
-  PaymentMethod: "Electronic check",
-  MonthlyCharges: 70,
-  TotalCharges: 840,
-};
 
 function formatDate(value?: string) {
   if (!value) return "—";
@@ -77,8 +53,7 @@ export default function Customers() {
   const [hasNextPage, setHasNextPage] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [formData, setFormData] =
-    useState<CustomerCreateInput>(EMPTY_CUSTOMER);
+  const [customerName, setCustomerName] = useState("");
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -89,6 +64,8 @@ export default function Customers() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
+  const [customerToDelete, setCustomerToDelete] =
+    useState<Customer | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -124,49 +101,52 @@ export default function Customers() {
 
     if (!query) return customers;
 
-    return customers.filter((customer) =>
-      customer.customer_code?.toLowerCase().includes(query)
+    return customers.filter(
+      (customer) =>
+        customer.customer_code?.toLowerCase().includes(query) ||
+        customer.name?.toLowerCase().includes(query)
     );
   }, [customers, search]);
-
-  function updateField<K extends keyof CustomerCreateInput>(
-    field: K,
-    value: CustomerCreateInput[K]
-  ) {
-    setFormData((current) => ({
-      ...current,
-      [field]: value,
-    }));
-  }
 
   async function handleCreateCustomer(
     event: React.FormEvent<HTMLFormElement>
   ) {
     event.preventDefault();
 
-    try {
-      setCreating(true);
-      setFormError(null);
+    const trimmedName = customerName.trim();
 
-      const payload: CustomerCreateInput = {
-        ...formData,
-        customer_code: formData.customer_code?.trim() || null,
-      };
+    if (!trimmedName) {
+      setFormError("Customer name is required.");
+      return;
+    }
 
-      await createCustomer(payload);
-
-      setShowCreateModal(false);
-      setFormData(EMPTY_CUSTOMER);
-      setPage(0);
-
-      if (page === 0) {
-        await loadCustomers();
-      }
-    } catch (err) {
+    if (trimmedName.length < 5) {
+      setFormError("Customer name must be at least 5 characters.");
+      return;
+    }
+    if (!/^[A-Za-z][A-Za-z\s'-]*$/.test(trimmedName)) {
       setFormError(
-        err instanceof Error
-          ? err.message
-          : "Failed to create customer."
+        "Customer name must contain English letters only."
+      );
+      return;
+    }
+    if (trimmedName.length > 100) {
+      setFormError("Customer name cannot exceed 100 characters.");
+      return;
+    }
+
+    setCreating(true);
+    setFormError("");
+
+    try {
+      await createCustomer({ name: trimmedName });
+
+      setCustomerName("");
+      setShowCreateModal(false);
+      await loadCustomers();
+    } catch (error) {
+      setFormError(
+        error instanceof Error ? error.message : "Failed to create customer."
       );
     } finally {
       setCreating(false);
@@ -198,18 +178,25 @@ export default function Customers() {
     }
   }
 
-  async function handleDeleteCustomer(customer: Customer) {
-    const confirmed = window.confirm(
-      `Delete customer ${customer.customer_code}?\n\nTheir prediction records will be preserved, but will no longer be linked to this customer.`
-    );
+  // Open the themed confirmation modal.
+  function handleDeleteCustomer(customer: Customer) {
+    setActionError(null);
+    setCustomerToDelete(customer);
+  }
 
-    if (!confirmed) return;
+  // Delete only after the user confirms.
+  async function confirmDeleteCustomer() {
+    if (!customerToDelete) return;
+
+    const customer = customerToDelete;
 
     try {
       setDeletingId(customer.id);
       setActionError(null);
 
       await deleteCustomer(customer.id);
+
+      setCustomerToDelete(null);
 
       if (selectedCustomer?.id === customer.id) {
         setSelectedCustomer(null);
@@ -235,60 +222,14 @@ export default function Customers() {
     if (creating) return;
 
     setShowCreateModal(false);
-    setFormData(EMPTY_CUSTOMER);
+    setCustomerName("");
     setFormError(null);
   }
 
-  function renderInput(
-    label: string,
-    field: keyof CustomerCreateInput,
-    type: "text" | "number" = "text",
-    options?: string[]
-  ) {
-    const value = formData[field];
+  function closeDeleteModal() {
+    if (deletingId !== null) return;
 
-    return (
-      <div className="customer-form-field" key={String(field)}>
-        <label htmlFor={`customer-${String(field)}`}>{label}</label>
-
-        {options ? (
-          <select
-            id={`customer-${String(field)}`}
-            value={String(value)}
-            onChange={(event) =>
-              updateField(
-                field,
-                event.target.value as CustomerCreateInput[typeof field]
-              )
-            }
-          >
-            {options.map((option) => (
-              <option value={option} key={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            id={`customer-${String(field)}`}
-            type={type}
-            value={String(value ?? "")}
-            min={type === "number" ? 0 : undefined}
-            onChange={(event) => {
-              const nextValue =
-                type === "number"
-                  ? Number(event.target.value)
-                  : event.target.value;
-
-              updateField(
-                field,
-                nextValue as CustomerCreateInput[typeof field]
-              );
-            }}
-          />
-        )}
-      </div>
-    );
+    setCustomerToDelete(null);
   }
 
   return (
@@ -313,7 +254,9 @@ export default function Customers() {
       </header>
 
       {actionError && (
-        <div className="error-banner">{actionError}</div>
+        <div className="error-banner" role="alert">
+          {actionError}
+        </div>
       )}
 
       <section className="overview-panel customers-panel">
@@ -321,18 +264,16 @@ export default function Customers() {
           <div>
             <span className="panel-label">CUSTOMER DATABASE</span>
             <h2>Customer Directory</h2>
-            <p>
-              {customers.length} customers on this page
-            </p>
+            <p>{customers.length} customers on this page</p>
           </div>
 
           <div className="customers-search">
             <input
               type="search"
-              placeholder="Search customer code..."
+              placeholder="Search name or customer code..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              aria-label="Search customers by customer code"
+              aria-label="Search customers"
             />
 
             <button
@@ -370,6 +311,7 @@ export default function Customers() {
             <table className="history-table customers-table">
               <thead>
                 <tr>
+                  <th>Name</th>
                   <th>Customer Code</th>
                   <th>Contract</th>
                   <th>Tenure</th>
@@ -387,13 +329,25 @@ export default function Customers() {
                   return (
                     <tr key={customer.id}>
                       <td>
+                        <strong>{customer.name || "—"}</strong>
+                      </td>
+
+                      <td>
                         <strong>{customer.customer_code || "—"}</strong>
                       </td>
+
                       <td>{data?.Contract || "—"}</td>
-                      <td>{data?.tenure ?? "—"} months</td>
+
+                      <td>
+                        {data?.tenure !== undefined
+                          ? `${data.tenure} months`
+                          : "—"}
+                      </td>
+
                       <td>{formatCurrency(data?.MonthlyCharges)}</td>
                       <td>{data?.InternetService || "—"}</td>
                       <td>{formatDate(customer.created_at)}</td>
+
                       <td>
                         <div className="customer-actions">
                           <button
@@ -411,12 +365,10 @@ export default function Customers() {
                             className="table-action-button danger-action"
                             disabled={deletingId === customer.id}
                             onClick={() =>
-                              void handleDeleteCustomer(customer)
+                              handleDeleteCustomer(customer)
                             }
                           >
-                            {deletingId === customer.id
-                              ? "Deleting..."
-                              : "Delete"}
+                            Delete
                           </button>
                         </div>
                       </td>
@@ -433,7 +385,9 @@ export default function Customers() {
             type="button"
             className="secondary-button"
             disabled={page === 0 || loading}
-            onClick={() => setPage((current) => Math.max(0, current - 1))}
+            onClick={() =>
+              setPage((current) => Math.max(0, current - 1))
+            }
           >
             Previous
           </button>
@@ -471,7 +425,10 @@ export default function Customers() {
               <div>
                 <span className="panel-label">NEW CUSTOMER</span>
                 <h2 id="create-customer-title">Add Customer</h2>
-                <p>Enter the customer's subscription information.</p>
+                <p>
+                  Enter a name to create a new customer profile.
+                  A customer code will be generated automatically.
+                </p>
               </div>
 
               <button
@@ -486,102 +443,21 @@ export default function Customers() {
 
             <form onSubmit={handleCreateCustomer}>
               <div className="customer-form-grid">
-                {renderInput("Customer Code", "customer_code")}
-
-                {renderInput("Gender", "gender", "text", [
-                  "Female",
-                  "Male",
-                ])}
-
-                {renderInput("Senior Citizen", "SeniorCitizen", "number", [
-                  "0",
-                  "1",
-                ])}
-
-                {renderInput("Partner", "Partner", "text", ["Yes", "No"])}
-                {renderInput("Dependents", "Dependents", "text", [
-                  "Yes",
-                  "No",
-                ])}
-
-                {renderInput("Tenure (months)", "tenure", "number")}
-
-                {renderInput("Phone Service", "PhoneService", "text", [
-                  "Yes",
-                  "No",
-                ])}
-
-                {renderInput("Multiple Lines", "MultipleLines", "text", [
-                  "No",
-                  "Yes",
-                  "No phone service",
-                ])}
-
-                {renderInput("Internet Service", "InternetService", "text", [
-                  "DSL",
-                  "Fiber optic",
-                  "No",
-                ])}
-
-                {renderInput("Online Security", "OnlineSecurity", "text", [
-                  "Yes",
-                  "No",
-                  "No internet service",
-                ])}
-
-                {renderInput("Online Backup", "OnlineBackup", "text", [
-                  "Yes",
-                  "No",
-                  "No internet service",
-                ])}
-
-                {renderInput(
-                  "Device Protection",
-                  "DeviceProtection",
-                  "text",
-                  ["Yes", "No", "No internet service"]
-                )}
-
-                {renderInput("Tech Support", "TechSupport", "text", [
-                  "Yes",
-                  "No",
-                  "No internet service",
-                ])}
-
-                {renderInput("Streaming TV", "StreamingTV", "text", [
-                  "Yes",
-                  "No",
-                  "No internet service",
-                ])}
-
-                {renderInput("Streaming Movies", "StreamingMovies", "text", [
-                  "Yes",
-                  "No",
-                  "No internet service",
-                ])}
-
-                {renderInput("Contract", "Contract", "text", [
-                  "Month-to-month",
-                  "One year",
-                  "Two year",
-                ])}
-
-                {renderInput(
-                  "Paperless Billing",
-                  "PaperlessBilling",
-                  "text",
-                  ["Yes", "No"]
-                )}
-
-                {renderInput("Payment Method", "PaymentMethod", "text", [
-                  "Electronic check",
-                  "Mailed check",
-                  "Bank transfer (automatic)",
-                  "Credit card (automatic)",
-                ])}
-
-                {renderInput("Monthly Charges", "MonthlyCharges", "number")}
-                {renderInput("Total Charges", "TotalCharges", "number")}
+                <div className="customer-form-field">
+                  <label htmlFor="customer-name">Customer Name</label>
+                  <input
+                    id="customer-name"
+                    type="text"
+                    placeholder="Enter customer name"
+                    value={customerName}
+                    onChange={(event) =>
+                      setCustomerName(event.target.value)
+                    }
+                    maxLength={150}
+                    required
+                    autoFocus
+                  />
+                </div>
               </div>
 
               {formError && (
@@ -603,12 +479,99 @@ export default function Customers() {
                 <button
                   type="submit"
                   className="prediction-submit"
-                  disabled={creating}
+                  disabled={creating || !customerName.trim()}
                 >
                   {creating ? "Creating..." : "Create Customer"}
                 </button>
               </div>
             </form>
+          </section>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {customerToDelete && (
+        <div
+          className="customer-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeDeleteModal();
+            }
+          }}
+        >
+          <section
+            className="customer-modal customer-create-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-customer-title"
+          >
+            <div className="customer-modal-header">
+              <div>
+                <span className="panel-label">DELETE CUSTOMER</span>
+
+                <h2 id="delete-customer-title">
+                  Confirm Deletion
+                </h2>
+
+                <p>
+                  Are you sure you want to delete this customer?
+                  This action cannot be undone.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="modal-close-button"
+                onClick={closeDeleteModal}
+                disabled={deletingId !== null}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="customer-detail-summary">
+              <div>
+                <span>Customer Name</span>
+                <strong>
+                  {customerToDelete.name || "—"}
+                </strong>
+              </div>
+
+              <div>
+                <span>Customer Code</span>
+                <strong>
+                  {customerToDelete.customer_code || "—"}
+                </strong>
+              </div>
+            </div>
+
+            <p className="customer-muted">
+              The customer's prediction records will be preserved,
+              but they will no longer be linked to this customer.
+            </p>
+
+            <div className="customer-modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeDeleteModal}
+                disabled={deletingId !== null}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                className="table-action-button danger-action"
+                onClick={() => void confirmDeleteCustomer()}
+                disabled={deletingId !== null}
+              >
+                {deletingId !== null
+                  ? "Deleting..."
+                  : "Yes, Delete Customer"}
+              </button>
+            </div>
           </section>
         </div>
       )}
@@ -633,9 +596,16 @@ export default function Customers() {
             <div className="customer-modal-header">
               <div>
                 <span className="panel-label">CUSTOMER PROFILE</span>
+
                 <h2 id="customer-details-title">
-                  {selectedCustomer?.customer_code || "Customer Details"}
+                  {selectedCustomer?.name ||
+                    selectedCustomer?.customer_code ||
+                    "Customer Details"}
                 </h2>
+
+                {selectedCustomer?.customer_code && (
+                  <p>{selectedCustomer.customer_code}</p>
+                )}
               </div>
 
               <button
@@ -669,14 +639,25 @@ export default function Customers() {
                   </div>
 
                   <div>
+                    <span>Customer Code</span>
+                    <strong>
+                      {selectedCustomer.customer_code || "—"}
+                    </strong>
+                  </div>
+
+                  <div>
                     <span>Prediction Records</span>
-                    <strong>{selectedCustomer.prediction_count ?? 0}</strong>
+                    <strong>
+                      {selectedCustomer.prediction_count ?? 0}
+                    </strong>
                   </div>
 
                   <div>
                     <span>Tenure</span>
                     <strong>
-                      {selectedCustomer.customer_data?.tenure ?? "—"} months
+                      {selectedCustomer.customer_data?.tenure !== undefined
+                        ? `${selectedCustomer.customer_data.tenure} months`
+                        : "—"}
                     </strong>
                   </div>
                 </div>
@@ -685,16 +666,26 @@ export default function Customers() {
                   Subscription Information
                 </h3>
 
-                <div className="customer-detail-grid">
-                  {Object.entries(
-                    selectedCustomer.customer_data as CustomerData
-                  ).map(([key, value]) => (
-                    <div className="customer-detail-item" key={key}>
-                      <span>{key}</span>
-                      <strong>{String(value)}</strong>
-                    </div>
-                  ))}
-                </div>
+                {Object.keys(
+                  selectedCustomer.customer_data ?? {}
+                ).length === 0 ? (
+                  <p className="customer-muted">
+                    No subscription information is available yet. A profile
+                    created without a prediction will show its information
+                    here after its first prediction.
+                  </p>
+                ) : (
+                  <div className="customer-detail-grid">
+                    {Object.entries(
+                      selectedCustomer.customer_data ?? {}
+                    ).map(([key, value]) => (
+                      <div className="customer-detail-item" key={key}>
+                        <span>{key}</span>
+                        <strong>{String(value ?? "—")}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <h3 className="customer-subheading">
                   Prediction History
@@ -721,21 +712,29 @@ export default function Customers() {
                         {customerPredictions.map((item) => (
                           <tr key={item.id}>
                             <td>#{item.id}</td>
+
                             <td>
-                              <span className={getPredictionClass(item.prediction)}>
+                              <span
+                                className={getPredictionClass(
+                                  item.prediction
+                                )}
+                              >
                                 {item.prediction === "Yes"
                                   ? "Churn"
                                   : "No Churn"}
                               </span>
                             </td>
+
                             <td>
                               {(item.churn_probability * 100).toFixed(1)}%
                             </td>
+
                             <td>
                               <span className={getRiskClass(item.risk_level)}>
                                 {item.risk_level}
                               </span>
                             </td>
+
                             <td>{formatDate(item.created_at)}</td>
                           </tr>
                         ))}

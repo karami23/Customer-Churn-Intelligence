@@ -1,5 +1,5 @@
+
 from datetime import date, timedelta
-from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -8,7 +8,7 @@ from fastapi import (
     Query,
     status,
 )
-from sqlalchemy import func
+from sqlalchemy import func, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -46,7 +46,6 @@ def predict_customer(
     customer: CustomerData,
     db: Session = Depends(get_db),
 ):
-
     customer_code = customer.customer_code
 
     customer_data = customer.model_dump(
@@ -56,11 +55,9 @@ def predict_customer(
     result = predict_churn(customer_data)
 
     try:
-
         db_customer = None
 
         if customer_code:
-
             db_customer = (
                 db.query(Customer)
                 .filter(
@@ -69,23 +66,25 @@ def predict_customer(
                 .first()
             )
 
-        if db_customer:
+            if db_customer:
+                db_customer.customer_data = customer_data
 
-            db_customer.customer_data = customer_data
+            else:
+                db_customer = Customer(
+                    name=None,
+                    customer_code=customer_code,
+                    customer_data=customer_data,
+                )
 
-        else:
-
-            db_customer = Customer(
-                customer_code=customer_code,
-                customer_data=customer_data,
-            )
-
-            db.add(db_customer)
-
-            db.flush()
+                db.add(db_customer)
+                db.flush()
 
         prediction_record = PredictionRecord(
-            customer_id=db_customer.id,
+            customer_id=(
+                db_customer.id
+                if db_customer
+                else None
+            ),
             customer_data=customer_data,
             prediction=result["prediction"],
             churn_probability=result["churn_probability"],
@@ -93,15 +92,12 @@ def predict_customer(
         )
 
         db.add(prediction_record)
-
         db.commit()
-
         db.refresh(prediction_record)
 
         return prediction_record
 
     except IntegrityError:
-
         db.rollback()
 
         raise HTTPException(
@@ -110,9 +106,7 @@ def predict_customer(
         )
 
     except Exception:
-
         db.rollback()
-
         raise
 
 
@@ -124,41 +118,33 @@ def predict_customer(
     "/",
     response_model=list[PredictionHistoryItem],
 )
-def get_predictions(
+def get_prediction_history(
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500),
-
-    prediction: Literal["Yes", "No"] | None = None,
-
-    risk_level: Literal[
-        "Low",
-        "Medium",
-        "High",
-    ] | None = None,
-
+    limit: int = Query(default=20, ge=1, le=100),
+    prediction: str | None = Query(
+        default=None,
+        pattern="^(Yes|No)$",
+    ),
+    risk_level: str | None = Query(
+        default=None,
+        pattern="^(Low|Medium|High)$",
+    ),
     db: Session = Depends(get_db),
 ):
-
     query = db.query(PredictionRecord)
 
     if prediction:
-
         query = query.filter(
             PredictionRecord.prediction == prediction
         )
 
     if risk_level:
-
         query = query.filter(
             PredictionRecord.risk_level == risk_level
         )
 
     return (
-        query
-        .order_by(
-            PredictionRecord.created_at.desc(),
-            PredictionRecord.id.desc(),
-        )
+        query.order_by(PredictionRecord.created_at.desc())
         .offset(skip)
         .limit(limit)
         .all()
@@ -166,34 +152,30 @@ def get_predictions(
 
 
 # ==================================================
-# GET: Prediction Details
+# GET: Prediction Detail
 # ==================================================
 
 @router.get(
     "/{prediction_id}",
     response_model=PredictionDetail,
 )
-def get_prediction(
+def get_prediction_detail(
     prediction_id: int,
     db: Session = Depends(get_db),
 ):
-
-    record = (
+    prediction_record = (
         db.query(PredictionRecord)
-        .filter(
-            PredictionRecord.id == prediction_id
-        )
+        .filter(PredictionRecord.id == prediction_id)
         .first()
     )
 
-    if not record:
-
+    if not prediction_record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Prediction not found.",
         )
 
-    return record
+    return prediction_record
 
 
 # ==================================================
@@ -208,38 +190,25 @@ def delete_prediction(
     prediction_id: int,
     db: Session = Depends(get_db),
 ):
-
-    record = (
+    prediction_record = (
         db.query(PredictionRecord)
-        .filter(
-            PredictionRecord.id == prediction_id
-        )
+        .filter(PredictionRecord.id == prediction_id)
         .first()
     )
 
-    if not record:
-
+    if not prediction_record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Prediction not found.",
         )
 
-    try:
+    db.delete(prediction_record)
+    db.commit()
 
-        db.delete(record)
-
-        db.commit()
-
-        return {
-            "message": "Prediction deleted successfully.",
-            "prediction_id": prediction_id,
-        }
-
-    except Exception:
-
-        db.rollback()
-
-        raise
+    return PredictionDeleteResponse(
+        message="Prediction deleted successfully.",
+        prediction_id=prediction_id,
+    )
 
 
 # ==================================================
@@ -253,52 +222,33 @@ def delete_prediction(
 def get_dashboard_summary(
     db: Session = Depends(get_db),
 ):
+    result = db.query(
+        func.count(PredictionRecord.id),
+        func.sum(
+            case(
+                (PredictionRecord.prediction == "Yes", 1),
+                else_=0,
 
-    total_predictions = (
-        db.query(
-            func.count(PredictionRecord.id)
-        )
-        .scalar()
-    ) or 0
-
-    churn_predictions = (
-        db.query(
-            func.count(PredictionRecord.id)
-        )
-        .filter(
-            PredictionRecord.prediction == "Yes"
-        )
-        .scalar()
-    ) or 0
-
-    non_churn_predictions = (
-        db.query(
-            func.count(PredictionRecord.id)
-        )
-        .filter(
-            PredictionRecord.prediction == "No"
-        )
-        .scalar()
-    ) or 0
-
-    average_probability = (
-        db.query(
-            func.avg(
-                PredictionRecord.churn_probability
             )
-        )
-        .scalar()
-    ) or 0.0
+        ),
+        func.avg(PredictionRecord.churn_probability),
+    ).one()
 
-    return {
-        "total_predictions": total_predictions,
-        "churn_predictions": churn_predictions,
-        "non_churn_predictions": non_churn_predictions,
-        "average_churn_probability": round(
+    total_predictions = result[0] or 0
+    churn_predictions = result[1] or 0
+    average_probability = result[2] or 0.0
+
+    return DashboardSummary(
+        total_predictions=total_predictions,
+        churn_predictions=churn_predictions,
+        non_churn_predictions=(
+            total_predictions - churn_predictions
+        ),
+        average_churn_probability=round(
             float(average_probability),
             4,
         ),
-    }
+    )
 
 
 # ==================================================
@@ -312,29 +262,26 @@ def get_dashboard_summary(
 def get_risk_distribution(
     db: Session = Depends(get_db),
 ):
-
     results = (
         db.query(
             PredictionRecord.risk_level,
             func.count(PredictionRecord.id),
         )
-        .group_by(
-            PredictionRecord.risk_level
-        )
+        .group_by(PredictionRecord.risk_level)
         .all()
     )
 
     counts = {
-        level: count
-        for level, count in results
+        risk: count
+        for risk, count in results
     }
 
     return [
-        {
-            "risk_level": level,
-            "count": counts.get(level, 0),
-        }
-        for level in ["Low", "Medium", "High"]
+        RiskDistributionItem(
+            risk_level=risk,
+            count=counts.get(risk, 0),
+        )
+        for risk in ["Low", "Medium", "High"]
     ]
 
 
@@ -354,82 +301,58 @@ def get_prediction_trend(
     ),
     db: Session = Depends(get_db),
 ):
+    start_date = date.today() - timedelta(days=days - 1)
 
-    today = date.today()
-
-    start_date = today - timedelta(
-        days=days - 1
-    )
-
-    end_date = today + timedelta(days=1)
-
-    records = (
+    results = (
         db.query(
-            func.date(PredictionRecord.created_at),
-            PredictionRecord.prediction,
-            func.count(PredictionRecord.id),
+            func.date(PredictionRecord.created_at).label(
+                "prediction_date"
+            ),
+            func.count(PredictionRecord.id).label("total"),
+            func.sum(
+                func.cast(
+                    PredictionRecord.prediction == "Yes",
+                    __import__("sqlalchemy").Integer(),
+                )
+            ).label("churn"),
         )
         .filter(
-            PredictionRecord.created_at >= start_date,
-            PredictionRecord.created_at < end_date,
+            PredictionRecord.created_at >= start_date
         )
         .group_by(
-            func.date(PredictionRecord.created_at),
-            PredictionRecord.prediction,
+            func.date(PredictionRecord.created_at)
+        )
+        .order_by(
+            func.date(PredictionRecord.created_at)
         )
         .all()
     )
 
-    daily_data = {}
-
-    for record_date, prediction, count in records:
-
-        if record_date is None:
-            continue
-
-        if hasattr(record_date, "date"):
-            record_date = record_date.date()
-
-        if record_date not in daily_data:
-
-            daily_data[record_date] = {
-                "total": 0,
-                "churn": 0,
-                "non_churn": 0,
-            }
-
-        daily_data[record_date]["total"] += count
-
-        if prediction == "Yes":
-
-            daily_data[record_date]["churn"] += count
-
-        else:
-
-            daily_data[record_date]["non_churn"] += count
+    trend_data = {
+        row.prediction_date: (
+            row.total,
+            row.churn or 0,
+        )
+        for row in results
+    }
 
     trend = []
 
-    for offset in range(days):
+    for day_offset in range(days):
+        current_date = start_date + timedelta(days=day_offset)
 
-        current_date = start_date + timedelta(
-            days=offset
-        )
-
-        values = daily_data.get(
+        total, churn = trend_data.get(
             current_date,
-            {
-                "total": 0,
-                "churn": 0,
-                "non_churn": 0,
-            },
+            (0, 0),
         )
 
-        trend.append({
-            "date": current_date.isoformat(),
-            "total": values["total"],
-            "churn": values["churn"],
-            "non_churn": values["non_churn"],
-        })
+        trend.append(
+            PredictionTrendItem(
+                date=current_date.isoformat(),
+                total=total,
+                churn=churn,
+                non_churn=total - churn,
+            )
+        )
 
     return trend

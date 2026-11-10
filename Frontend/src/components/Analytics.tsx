@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   Cell,
@@ -17,10 +17,10 @@ import {
 import {
   getDashboardSummary,
   getRiskDistribution,
-  getPredictionHistory,
+  getPredictionTrend,
   type DashboardSummary,
   type RiskDistributionItem,
-  type PredictionHistoryItem,
+  type PredictionTrendItem,
 } from "../lib/api";
 
 // ==========================================
@@ -91,7 +91,7 @@ export default function Analytics() {
 
   const [risks, setRisks] = useState<RiskDistributionItem[]>([]);
 
-  const [history, setHistory] = useState<PredictionHistoryItem[]>([]);
+  const [trend, setTrend] = useState<PredictionTrendItem[]>([]);
 
   const [days, setDays] = useState(30);
 
@@ -108,22 +108,15 @@ export default function Analytics() {
       setLoading(true);
       setError("");
 
-      const [summaryData, riskData, historyData] = await Promise.all([
+      const [summaryData, riskData, trendData] = await Promise.all([
         getDashboardSummary(),
         getRiskDistribution(),
-        getPredictionHistory({
-          skip: 0,
-          limit: 100,
-        }),
+        getPredictionTrend(days),
       ]);
 
       setSummary(summaryData);
-
       setRisks(riskData);
-
-      setHistory(Array.isArray(historyData) ? historyData : []);
-
-      console.log("Analytics history:", historyData);
+      setTrend(trendData);
     } catch (err) {
       console.error("Analytics loading error:", err);
 
@@ -135,7 +128,7 @@ export default function Analytics() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [days]);
 
   useEffect(() => {
     void loadAnalytics();
@@ -173,70 +166,12 @@ export default function Analytics() {
 
   // ==========================================
   // Prediction Trend Data
-  // Build chart directly from prediction history
+  // Data comes directly from Backend
   // ==========================================
 
-  const chartData = useMemo(() => {
-    const dateMap = new Map<
-      string,
-      {
-        date: string;
-        total_predictions: number;
-        churn_predictions: number;
-      }
-    >();
+  const chartData = trend;
 
-    const today = new Date();
-
-    // Create one entry for every day in selected period.
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date(today);
-
-      date.setHours(12, 0, 0, 0);
-      date.setDate(today.getDate() - i);
-
-      const dateKey = [
-        date.getFullYear(),
-        String(date.getMonth() + 1).padStart(2, "0"),
-        String(date.getDate()).padStart(2, "0"),
-      ].join("-");
-
-      dateMap.set(dateKey, {
-        date: dateKey,
-        total_predictions: 0,
-        churn_predictions: 0,
-      });
-    }
-
-    // Add actual prediction records.
-    history.forEach((item) => {
-      const createdAt = new Date(item.created_at);
-
-      if (Number.isNaN(createdAt.getTime())) {
-        return;
-      }
-
-      const dateKey = [
-        createdAt.getFullYear(),
-        String(createdAt.getMonth() + 1).padStart(2, "0"),
-        String(createdAt.getDate()).padStart(2, "0"),
-      ].join("-");
-
-      const dayData = dateMap.get(dateKey);
-
-      if (!dayData) {
-        return;
-      }
-
-      dayData.total_predictions += 1;
-
-      if (item.prediction === "Yes") {
-        dayData.churn_predictions += 1;
-      }
-    });
-
-    return Array.from(dateMap.values());
-  }, [history, days]);
+  const hasTrendData = trend.some((item) => item.total > 0);
 
   // ==========================================
   // Loading State
@@ -427,8 +362,8 @@ export default function Analytics() {
             </select>
           </div>
 
-          {history.length === 0 ? (
-            <EmptyState message="No prediction history available yet." />
+          {!hasTrendData ? (
+            <EmptyState message="No prediction history available for this period." />
           ) : (
             <div className="analytics-chart-container">
               <ResponsiveContainer width="100%" height="100%">
@@ -487,7 +422,7 @@ export default function Analytics() {
 
                   <Line
                     type="monotone"
-                    dataKey="total_predictions"
+                    dataKey="total"
                     name="Total Predictions"
                     stroke="#6366f1"
                     strokeWidth={2.5}
@@ -498,9 +433,20 @@ export default function Analytics() {
 
                   <Line
                     type="monotone"
-                    dataKey="churn_predictions"
+                    dataKey="churn"
                     name="Churn Predictions"
                     stroke="#ef4444"
+                    strokeWidth={2.5}
+                    dot={{ r: 4 }}
+                    activeDot={{ r: 7 }}
+                    connectNulls
+                  />
+
+                  <Line
+                    type="monotone"
+                    dataKey="non_churn"
+                    name="No Churn Predictions"
+                    stroke="#22c55e"
                     strokeWidth={2.5}
                     dot={{ r: 4 }}
                     activeDot={{ r: 7 }}

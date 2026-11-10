@@ -1,6 +1,10 @@
-
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
+
 
 // ==========================================
 // Types
@@ -29,8 +33,8 @@ export interface CustomerPredictionInput {
   TotalCharges: number;
 }
 
-export interface CustomerCreateInput extends CustomerPredictionInput {
-  customer_code: string | null;
+export interface CustomerCreateInput {
+  name: string;
 }
 
 export type CustomerData = Omit<
@@ -40,9 +44,11 @@ export type CustomerData = Omit<
 
 export interface Customer {
   id: number;
+  name: string | null;
   customer_code: string | null;
-  customer_data: CustomerData;
+  customer_data: Partial<CustomerData>;
   created_at?: string;
+  updated_at?: string;
 }
 
 export interface CustomerDetail extends Customer {
@@ -50,12 +56,12 @@ export interface CustomerDetail extends Customer {
 }
 
 export interface PredictionResult {
-  id?: number;
-  customer_id?: number | null;
+  id: number;
+  customer_id: number | null;
   prediction: "Yes" | "No";
   churn_probability: number;
   risk_level: "Low" | "Medium" | "High";
-  created_at?: string;
+  created_at: string;
 }
 
 export interface DashboardSummary {
@@ -72,8 +78,9 @@ export interface RiskDistributionItem {
 
 export interface PredictionTrendItem {
   date: string;
-  total_predictions: number;
-  churn_predictions: number;
+  total: number;
+  churn: number;
+  non_churn: number;
 }
 
 export interface PredictionHistoryItem {
@@ -84,6 +91,10 @@ export interface PredictionHistoryItem {
   risk_level: "Low" | "Medium" | "High";
   created_at: string;
   customer_data?: Record<string, unknown>;
+}
+
+export interface PredictionDetail extends PredictionHistoryItem {
+  customer_data: Record<string, unknown>;
 }
 
 export interface PredictionHistoryFilters {
@@ -99,87 +110,116 @@ export interface CustomerFilters {
 }
 
 // ==========================================
-// API Helper
+// Response Helpers
 // ==========================================
 
 async function handleResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || `Request failed: ${response.status}`);
-  }
-
   if (response.status === 204) {
     return undefined as T;
   }
 
-  return response.json() as Promise<T>;
+  const contentType = response.headers.get("content-type");
+
+  const data = contentType?.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+
+    if (typeof data === "string" && data.trim()) {
+      message = data;
+    } else if (data && typeof data === "object") {
+      const errorData = data as {
+        detail?: string | Array<{ msg?: string }>;
+        message?: string;
+      };
+
+      if (typeof errorData.detail === "string") {
+        message = errorData.detail;
+      } else if (Array.isArray(errorData.detail)) {
+        message = errorData.detail
+          .map((item) => item.msg || "Invalid request")
+          .join(", ");
+      } else if (errorData.message) {
+        message = errorData.message;
+      }
+    }
+
+    throw new Error(message);
+  }
+
+  return data as T;
 }
 
-function extractList<T>(data: unknown, resourceName: string): T[] {
-  if (Array.isArray(data)) {
-    return data as T[];
+async function apiRequest<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+
+  return handleResponse<T>(response);
+}
+
+function extractList<T>(
+  response: T[] | Record<string, unknown>,
+  resourceName: string
+): T[] {
+  if (Array.isArray(response)) {
+    return response as T[];
   }
 
-  if (typeof data === "object" && data !== null) {
-    const responseData = data as Record<string, unknown>;
+  if (response && typeof response === "object") {
+    const data = response as Record<string, unknown>;
 
-    if (Array.isArray(responseData.items)) {
-      return responseData.items as T[];
+    if (Array.isArray(data.items)) {
+      return data.items as T[];
     }
 
-    if (Array.isArray(responseData[resourceName])) {
-      return responseData[resourceName] as T[];
+    if (Array.isArray(data[resourceName])) {
+      return data[resourceName] as T[];
     }
   }
 
-  throw new Error(`Unexpected ${resourceName} response format`);
+  return [];
 }
 
 // ==========================================
-// Dashboard Summary
+// Dashboard
 // ==========================================
 
 export async function getDashboardSummary(): Promise<DashboardSummary> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/stats/summary`,
-    { cache: "no-store" }
+  return apiRequest<DashboardSummary>(
+    "/api/v1/predictions/stats/summary"
   );
-
-  return handleResponse<DashboardSummary>(response);
 }
 
 // ==========================================
-// Customer Prediction
+// Predictions
 // ==========================================
 
 export async function predictCustomerChurn(
   customer: CustomerPredictionInput
 ): Promise<PredictionResult> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/predict`,
+  return apiRequest<PredictionResult>(
+    "/api/v1/predictions/predict",
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify(customer),
     }
   );
-
-  return handleResponse<PredictionResult>(response);
 }
-
-// ==========================================
-// Prediction History
-// ==========================================
 
 export async function getPredictionHistory(
   filters: PredictionHistoryFilters = {}
 ): Promise<PredictionHistoryItem[]> {
   const params = new URLSearchParams();
-
-  params.set("skip", String(filters.skip ?? 0));
-  params.set("limit", String(filters.limit ?? 100));
 
   if (filters.prediction) {
     params.set("prediction", filters.prediction);
@@ -189,80 +229,73 @@ export async function getPredictionHistory(
     params.set("risk_level", filters.risk_level);
   }
 
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/?${params.toString()}`,
-    { cache: "no-store" }
-  );
+  if (filters.skip !== undefined) {
+    params.set("skip", String(filters.skip));
+  }
 
-  const data = await handleResponse<unknown>(response);
+  if (filters.limit !== undefined) {
+    params.set("limit", String(filters.limit));
+  }
 
-  return extractList<PredictionHistoryItem>(data, "predictions");
+  const query = params.toString();
+  const endpoint = `/api/v1/predictions/${query ? `?${query}` : ""}`;
+
+  const response = await apiRequest<
+    PredictionHistoryItem[] | Record<string, unknown>
+  >(endpoint);
+
+  return extractList<PredictionHistoryItem>(response, "predictions");
 }
-
-// ==========================================
-// Get Prediction Details
-// ==========================================
 
 export async function getPredictionById(
   predictionId: number
-): Promise<PredictionHistoryItem> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/${predictionId}`,
-    { cache: "no-store" }
+): Promise<PredictionDetail> {
+  return apiRequest<PredictionDetail>(
+    `/api/v1/predictions/${predictionId}`
   );
-
-  return handleResponse<PredictionHistoryItem>(response);
 }
-
-// ==========================================
-// Delete Prediction
-// ==========================================
 
 export async function deletePrediction(
   predictionId: number
-): Promise<void> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/${predictionId}`,
-    { method: "DELETE" }
+): Promise<{ message: string; prediction_id: number }> {
+  return apiRequest<{ message: string; prediction_id: number }>(
+    `/api/v1/predictions/${predictionId}`,
+    {
+      method: "DELETE",
+    }
   );
-
-  await handleResponse<void>(response);
 }
 
 // ==========================================
-// Risk Distribution
+// Prediction Statistics
 // ==========================================
 
 export async function getRiskDistribution(): Promise<
   RiskDistributionItem[]
 > {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/stats/risks`,
-    { cache: "no-store" }
-  );
+  const response = await apiRequest<
+    RiskDistributionItem[] | Record<string, unknown>
+  >("/api/v1/predictions/stats/risks");
 
-  return handleResponse<RiskDistributionItem[]>(response);
+  return extractList<RiskDistributionItem>(response, "risks");
 }
-
-// ==========================================
-// Prediction Trend
-// ==========================================
 
 export async function getPredictionTrend(
-  days: number = 30
+  days = 30
 ): Promise<PredictionTrendItem[]> {
-  const safeDays = Math.min(365, Math.max(1, Math.floor(days)));
+  const params = new URLSearchParams({
+    days: String(days),
+  });
 
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/predictions/stats/trend?days=${safeDays}`,
-    { cache: "no-store" }
-  );
+  const response = await apiRequest<
+    PredictionTrendItem[] | Record<string, unknown>
+  >(`/api/v1/predictions/stats/trend?${params.toString()}`);
 
-  return handleResponse<PredictionTrendItem[]>(response);
+  return extractList<PredictionTrendItem>(response, "trend");
 }
 
 // ==========================================
-// Customers - Get All
+// Customers
 // ==========================================
 
 export async function getCustomers(
@@ -270,99 +303,74 @@ export async function getCustomers(
 ): Promise<Customer[]> {
   const params = new URLSearchParams();
 
-  params.set("skip", String(filters.skip ?? 0));
-  params.set("limit", String(filters.limit ?? 100));
+  if (filters.skip !== undefined) {
+    params.set("skip", String(filters.skip));
+  }
 
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/customers/?${params.toString()}`,
-    { cache: "no-store" }
-  );
+  if (filters.limit !== undefined) {
+    params.set("limit", String(filters.limit));
+  }
 
-  const data = await handleResponse<unknown>(response);
+  const query = params.toString();
+  const endpoint = `/api/v1/customers/${query ? `?${query}` : ""}`;
 
-  return extractList<Customer>(data, "customers");
+  const response = await apiRequest<
+    Customer[] | Record<string, unknown>
+  >(endpoint);
+
+  return extractList<Customer>(response, "customers");
 }
-
-// ==========================================
-// Customers - Create
-// ==========================================
 
 export async function createCustomer(
   customer: CustomerCreateInput
 ): Promise<Customer> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/customers/`,
+  return apiRequest<Customer>(
+    "/api/v1/customers/",
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify(customer),
     }
   );
-
-  return handleResponse<Customer>(response);
 }
-
-// ==========================================
-// Customers - Get Details
-// ==========================================
 
 export async function getCustomerById(
   customerId: number
 ): Promise<CustomerDetail> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/customers/${customerId}`,
-    { cache: "no-store" }
+  return apiRequest<CustomerDetail>(
+    `/api/v1/customers/${customerId}`
   );
-
-  return handleResponse<CustomerDetail>(response);
 }
-
-// ==========================================
-// Customers - Get Prediction History
-// ==========================================
 
 export async function getCustomerPredictions(
   customerId: number
 ): Promise<PredictionHistoryItem[]> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/customers/${customerId}/predictions`,
-    { cache: "no-store" }
-  );
+  const response = await apiRequest<
+    PredictionHistoryItem[] | Record<string, unknown>
+  >(`/api/v1/customers/${customerId}/predictions`);
 
-  const data = await handleResponse<unknown>(response);
-
-  return extractList<PredictionHistoryItem>(data, "predictions");
+  return extractList<PredictionHistoryItem>(response, "predictions");
 }
-
-// ==========================================
-// Customers - Delete
-// ==========================================
 
 export async function deleteCustomer(
   customerId: number
-): Promise<void> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/customers/${customerId}`,
-    { method: "DELETE" }
+): Promise<{ message: string; customer_id: number }> {
+  return apiRequest<{ message: string; customer_id: number }>(
+    `/api/v1/customers/${customerId}`,
+    {
+      method: "DELETE",
+    }
   );
-
-  await handleResponse<void>(response);
 }
 
 // ==========================================
-// API Health Check
+// Health Check
 // ==========================================
-
-export function getApiBaseUrl(): string {
-  return API_BASE_URL;
-}
 
 export async function checkApiHealth(): Promise<boolean> {
-  const response = await fetch(`${API_BASE_URL}/health`, {
-    cache: "no-store",
-  });
-
-  return response.ok;
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

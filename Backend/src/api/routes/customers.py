@@ -1,3 +1,6 @@
+
+from uuid import uuid4
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -6,13 +9,13 @@ from fastapi import (
     status,
 )
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.api.database import get_db
 from src.api.schemas import (
-    CustomerData,
+    CustomerCreate,
     CustomerListItem,
     CustomerDetail,
     CustomerDeleteResponse,
@@ -20,10 +23,54 @@ from src.api.schemas import (
 )
 from src.models import Customer, PredictionRecord
 
+
 router = APIRouter(
     prefix="/api/v1/customers",
     tags=["Customers"],
 )
+
+
+# ==================================================
+# POST: Create Customer
+# ==================================================
+
+@router.post(
+    "/",
+    response_model=CustomerListItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_customer(
+    customer_data: CustomerCreate,
+    db: Session = Depends(get_db),
+):
+
+    customer = Customer(
+        name=customer_data.name,
+        customer_code=f"CUS-{uuid4().hex[:12].upper()}",
+        customer_data={},
+    )
+
+    try:
+
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+
+        return customer
+
+    except IntegrityError:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not generate a unique customer code. Please try again.",
+        )
+
+    except Exception:
+
+        db.rollback()
+        raise
 
 
 # ==================================================
@@ -55,9 +102,12 @@ def get_customers(
 
     if search:
 
+        search_term = f"%{search.strip()}%"
+
         query = query.filter(
-            Customer.customer_code.ilike(
-                f"%{search.strip()}%"
+            or_(
+                Customer.customer_code.ilike(search_term),
+                Customer.name.ilike(search_term),
             )
         )
 
@@ -113,6 +163,7 @@ def get_customer(
 
     return {
         "id": customer.id,
+        "name": customer.name,
         "customer_code": customer.customer_code,
         "customer_data": customer.customer_data,
         "created_at": customer.created_at,
@@ -229,65 +280,5 @@ def delete_customer(
 
     except Exception:
 
-        db.rollback()
-
-        raise
-# ==================================================
-# POST: Create Customer
-# ==================================================
-
-@router.post(
-    "/",
-    response_model=CustomerListItem,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_customer(
-    customer_data: CustomerData,
-    db: Session = Depends(get_db),
-):
-    customer_code = customer_data.customer_code
-
-    data = customer_data.model_dump(
-        exclude={"customer_code"}
-    )
-
-    try:
-        # Check duplicate customer code
-        if customer_code:
-            existing_customer = (
-                db.query(Customer)
-                .filter(
-                    Customer.customer_code == customer_code
-                )
-                .first()
-            )
-
-            if existing_customer:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Customer code already exists.",
-                )
-
-        # Create customer
-        customer = Customer(
-            customer_code=customer_code,
-            customer_data=data,
-        )
-
-        db.add(customer)
-        db.commit()
-        db.refresh(customer)
-
-        return customer
-
-    except IntegrityError:
-        db.rollback()
-
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Customer code already exists.",
-        )
-
-    except Exception:
         db.rollback()
         raise

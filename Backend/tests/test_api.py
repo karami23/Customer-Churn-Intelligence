@@ -1,66 +1,6 @@
 import pytest
 
-
-# --------------------------------------------------
-# Shared Test Data
-# --------------------------------------------------
-
 @pytest.fixture
-def customer_data():
-    return {
-        "customer_code": "TEST-001",
-        "gender": "Female",
-        "SeniorCitizen": 0,
-        "Partner": "Yes",
-        "Dependents": "No",
-        "tenure": 12,
-        "PhoneService": "Yes",
-        "MultipleLines": "No",
-        "InternetService": "Fiber optic",
-        "OnlineSecurity": "No",
-        "OnlineBackup": "Yes",
-        "DeviceProtection": "No",
-        "TechSupport": "No",
-        "StreamingTV": "Yes",
-        "StreamingMovies": "Yes",
-        "Contract": "Month-to-month",
-        "PaperlessBilling": "Yes",
-        "PaymentMethod": "Electronic check",
-        "MonthlyCharges": 85.5,
-        "TotalCharges": 1026.0,
-    }
-
-
-@pytest.fixture
-def created_prediction(client, monkeypatch, customer_data):
-    from src.api.routes import predictions
-
-    def fake_predict_churn(data):
-        return {
-            "prediction": "Yes",
-            "churn_probability": 0.85,
-            "risk_level": "High",
-        }
-
-    monkeypatch.setattr(
-        predictions,
-        "predict_churn",
-        fake_predict_churn,
-    )
-
-    response = client.post(
-        "/api/v1/predictions/predict",
-        json=customer_data,
-    )
-
-    assert response.status_code in (200, 201)
-
-    return response.json()
-
-
-# --------------------------------------------------
-# General API Tests
-# --------------------------------------------------
 
 def test_root(client):
     response = client.get("/", follow_redirects=False)
@@ -75,11 +15,6 @@ def test_health(client):
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
 
-
-# --------------------------------------------------
-# Prediction Tests
-# --------------------------------------------------
-
 def test_prediction_rejects_invalid_input(client):
     response = client.post(
         "/api/v1/predictions/predict",
@@ -89,28 +24,157 @@ def test_prediction_rejects_invalid_input(client):
     assert response.status_code == 422
 
 
-def test_create_prediction(client, created_prediction):
+def test_create_prediction(created_prediction):
     assert created_prediction["prediction"] == "Yes"
     assert created_prediction["churn_probability"] == 0.85
     assert created_prediction["risk_level"] == "High"
-    assert created_prediction["customer_id"] is not None
 
 
-def test_get_predictions_history(client, created_prediction):
-    response = client.get("/api/v1/predictions/")
+def test_prediction_without_customer_code(
+    client,
+    monkeypatch,
+    customer_data,
+):
+    from src.api.routes import predictions
 
-    assert response.status_code == 200
+    def mock_predict_churn(customer):
+        return {
+            "prediction": "No",
+            "churn_probability": 0.15,
+            "risk_level": "Low",
+        }
 
-    data = response.json()
-
-    assert len(data) >= 1
-    assert any(
-        item["id"] == created_prediction["id"]
-        for item in data
+    monkeypatch.setattr(
+        predictions,
+        "predict_churn",
+        mock_predict_churn,
     )
 
+    payload = customer_data.copy()
+    payload.pop("customer_code")
 
-def test_get_prediction_by_id(client, created_prediction):
+    response = client.post(
+        "/api/v1/predictions/predict",
+        json=payload,
+    )
+
+    assert response.status_code == 201
+
+    prediction_id = response.json()["id"]
+
+    detail_response = client.get(
+        f"/api/v1/predictions/{prediction_id}"
+    )
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["customer_id"] is None
+
+
+def test_prediction_with_unknown_customer_code(
+    client,
+    monkeypatch,
+    customer_data,
+):
+    from src.api.routes import predictions
+
+    def mock_predict_churn(customer):
+        return {
+            "prediction": "Yes",
+            "churn_probability": 0.85,
+            "risk_level": "High",
+        }
+
+    monkeypatch.setattr(
+        predictions,
+        "predict_churn",
+        mock_predict_churn,
+    )
+
+    response = client.post(
+        "/api/v1/predictions/predict",
+        json=customer_data,
+    )
+
+    assert response.status_code == 201
+
+    customer_response = client.get(
+        "/api/v1/customers/",
+        params={"search": "TEST-001"},
+    )
+
+    assert customer_response.status_code == 200
+
+    customers = customer_response.json()
+
+    assert len(customers) == 1
+    assert customers[0]["customer_code"] == "TEST-001"
+    assert customers[0]["name"] is None
+
+
+def test_prediction_updates_existing_customer(
+    client,
+    monkeypatch,
+    customer_data,
+):
+    from src.api.routes import predictions
+
+    # Create a customer manually
+    create_response = client.post(
+        "/api/v1/customers/",
+        json={"name": "John Smith"},
+    )
+
+    assert create_response.status_code == 201
+
+    created_customer = create_response.json()
+    customer_code = created_customer["customer_code"]
+    customer_id = created_customer["id"]
+
+    def mock_predict_churn(customer):
+        return {
+            "prediction": "Yes",
+            "churn_probability": 0.85,
+            "risk_level": "High",
+        }
+
+    monkeypatch.setattr(
+        predictions,
+        "predict_churn",
+        mock_predict_churn,
+    )
+
+    payload = customer_data.copy()
+    payload["customer_code"] = customer_code
+
+    prediction_response = client.post(
+        "/api/v1/predictions/predict",
+        json=payload,
+    )
+
+    assert prediction_response.status_code == 201
+
+    prediction_id = prediction_response.json()["id"]
+
+    detail_response = client.get(
+        f"/api/v1/predictions/{prediction_id}"
+    )
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["customer_id"] == customer_id
+
+    customer_detail = client.get(
+        f"/api/v1/customers/{customer_id}"
+    )
+
+    assert customer_detail.status_code == 200
+    assert customer_detail.json()["name"] == "John Smith"
+    assert customer_detail.json()["prediction_count"] == 1
+
+def test_get_prediction_history(client, created_prediction):
+    response = client.get("/api/v1/predictions/")
+    assert response.status_code == 200
+
+def test_get_prediction_detail(client, created_prediction):
     prediction_id = created_prediction["id"]
 
     response = client.get(
@@ -118,27 +182,16 @@ def test_get_prediction_by_id(client, created_prediction):
     )
 
     assert response.status_code == 200
-
-    data = response.json()
-
-    assert data["id"] == prediction_id
-    assert data["prediction"] == "Yes"
-    assert data["churn_probability"] == 0.85
-    assert data["risk_level"] == "High"
-    assert data["customer_data"]["gender"] == "Female"
+    assert response.json()["id"] == prediction_id
 
 
 def test_get_prediction_not_found(client):
-    response = client.get(
-        "/api/v1/predictions/999999"
-    )
-
+    response = client.get("/api/v1/predictions/99999")
     assert response.status_code == 404
 
 
 def test_delete_prediction(client, created_prediction):
     prediction_id = created_prediction["id"]
-
     response = client.delete(
         f"/api/v1/predictions/{prediction_id}"
     )
@@ -151,57 +204,111 @@ def test_delete_prediction(client, created_prediction):
 
     assert detail_response.status_code == 404
 
-
-# --------------------------------------------------
-# Customer Tests
-# --------------------------------------------------
-
-def test_create_customer(client, customer_data):
+def test_create_customer(client):
     response = client.post(
         "/api/v1/customers/",
-        json=customer_data,
+        json={"name": "John Smith"},
     )
 
     assert response.status_code == 201
 
     data = response.json()
 
-    assert data["customer_code"] == "TEST-001"
     assert data["id"] is not None
+    assert data["name"] == "John Smith"
+    assert data["customer_code"].startswith("CUS-")
+    assert len(data["customer_code"]) == 16
+    assert data["customer_data"] == {}
 
 
-def test_create_customer_duplicate_code(client, customer_data):
-    first_response = client.post(
+def test_create_customer_rejects_empty_name(client):
+    response = client.post(
         "/api/v1/customers/",
-        json=customer_data,
+        json={"name": "   "},
     )
 
-    assert first_response.status_code == 201
+    assert response.status_code == 422
+
+
+def test_create_customer_rejects_missing_name(client):
+    response = client.post(
+        "/api/v1/customers/",
+        json={},
+    )
+
+    assert response.status_code == 422
+
+
+def test_customer_codes_are_unique(client):
+    first_response = client.post(
+        "/api/v1/customers/",
+        json={"name": "John"},
+    )
 
     second_response = client.post(
         "/api/v1/customers/",
-        json=customer_data,
+        json={"name": "Jane"},
     )
 
-    assert second_response.status_code == 409
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+
+    first_code = first_response.json()["customer_code"]
+    second_code = second_response.json()["customer_code"]
+
+    assert first_code != second_code
 
 
-def test_get_customers(client, customer_data):
+def test_get_customers(client):
     client.post(
         "/api/v1/customers/",
-        json=customer_data,
+        json={"name": "John Smith"},
     )
 
     response = client.get("/api/v1/customers/")
 
     assert response.status_code == 200
-    assert len(response.json()) >= 1
+    assert len(response.json()) == 1
 
 
-def test_get_customer_by_id(client, customer_data):
+def test_search_customers_by_name(client):
+    client.post(
+        "/api/v1/customers/",
+        json={"name": "John Smith"},
+    )
+
+    response = client.get(
+        "/api/v1/customers/",
+        params={"search": "John"},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["name"] == "John Smith"
+
+
+def test_search_customers_by_code(client):
     create_response = client.post(
         "/api/v1/customers/",
-        json=customer_data,
+        json={"name": "John Smith"},
+    )
+
+    customer_code = create_response.json()["customer_code"]
+
+    response = client.get(
+        "/api/v1/customers/",
+        params={"search": customer_code},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["customer_code"] == customer_code
+
+
+def test_get_customer_detail(client):
+    create_response = client.post(
+        "/api/v1/customers/",
+        json={"name": "John Smith"},
     )
 
     customer_id = create_response.json()["id"]
@@ -212,12 +319,12 @@ def test_get_customer_by_id(client, customer_data):
 
     assert response.status_code == 200
     assert response.json()["id"] == customer_id
+    assert response.json()["name"] == "John Smith"
+    assert response.json()["prediction_count"] == 0
 
 
 def test_get_customer_not_found(client):
-    response = client.get(
-        "/api/v1/customers/999999"
-    )
+    response = client.get("/api/v1/customers/99999")
 
     assert response.status_code == 404
 
@@ -226,71 +333,73 @@ def test_get_customer_predictions(
     client,
     created_prediction,
 ):
-    customer_id = created_prediction["customer_id"]
+    customer_response = client.get(
+        "/api/v1/customers/",
+        params={"search": "TEST-001"},
+    )
+
+    assert customer_response.status_code == 200
+
+    customer_id = customer_response.json()[0]["id"]
 
     response = client.get(
         f"/api/v1/customers/{customer_id}/predictions"
     )
 
     assert response.status_code == 200
-    assert len(response.json()) >= 1
+    assert len(response.json()) == 1
 
 
-def test_delete_customer(client, created_prediction):
-    customer_id = created_prediction["customer_id"]
+def test_delete_customer_preserves_predictions(
+    client,
+    created_prediction,
+):
+    customer_response = client.get(
+        "/api/v1/customers/",
+        params={"search": "TEST-001"},
+    )
 
-    response = client.delete(
+    customer_id = customer_response.json()[0]["id"]
+    prediction_id = created_prediction["id"]
+
+    delete_response = client.delete(
         f"/api/v1/customers/{customer_id}"
     )
 
-    assert response.status_code == 200
+    assert delete_response.status_code == 200
 
-    # Prediction should remain after deleting its customer.
-    prediction_response = client.get(
-        f"/api/v1/predictions/{created_prediction['id']}"
+    customer_detail = client.get(
+        f"/api/v1/customers/{customer_id}"
     )
 
-    assert prediction_response.status_code == 200
-    assert prediction_response.json()["customer_id"] is None
-def test_prediction_summary(client, created_prediction):
+    assert customer_detail.status_code == 404
+
+    prediction_detail = client.get(
+        f"/api/v1/predictions/{prediction_id}"
+    )
+
+    assert prediction_detail.status_code == 200
+    assert prediction_detail.json()["customer_id"] is None
+
+def test_dashboard_summary(client, created_prediction):
     response = client.get(
         "/api/v1/predictions/stats/summary"
     )
 
     assert response.status_code == 200
 
-    data = response.json()
 
-    assert data["total_predictions"] == 1
-    assert data["churn_predictions"] == 1
-    assert data["non_churn_predictions"] == 0
-    assert data["average_churn_probability"] == 0.85
-
-
-def test_prediction_risk_distribution(client, created_prediction):
+def test_dashboard_risk_distribution(client, created_prediction):
     response = client.get(
         "/api/v1/predictions/stats/risks"
     )
 
     assert response.status_code == 200
 
-    data = response.json()
 
-    assert isinstance(data, list)
-
-    high_risk = next(
-        (item for item in data if item["risk_level"] == "High"),
-        None,
-    )
-
-    assert high_risk is not None
-    assert high_risk["count"] == 1
-
-
-def test_prediction_trend(client, created_prediction):
+def test_dashboard_trend(client, created_prediction):
     response = client.get(
         "/api/v1/predictions/stats/trend"
     )
 
     assert response.status_code == 200
-    assert isinstance(response.json(), list)

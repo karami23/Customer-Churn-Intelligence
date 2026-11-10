@@ -1,14 +1,19 @@
-
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
+  createCustomer,
+  getCustomers,
   predictCustomerChurn,
+  type Customer,
   type CustomerPredictionInput,
 } from "../lib/api";
 
 interface PredictionResult {
+  id: number;
+  customer_id: number | null;
   prediction: "Yes" | "No";
   churn_probability: number;
-  risk_level: string;
+  risk_level: "Low" | "Medium" | "High";
+  created_at?: string;
 }
 
 const initialForm: CustomerPredictionInput = {
@@ -103,7 +108,17 @@ const selectFields = [
 export default function PredictionForm() {
   const [form, setForm] = useState<CustomerPredictionInput>(initialForm);
 
-  // رشته‌ها اجازه می‌دهند ورودی عددی موقتاً خالی باشد.
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [customersError, setCustomersError] = useState<string | null>(null);
+
+  const [selectedCustomerId, setSelectedCustomerId] = useState("new");
+  const [customerName, setCustomerName] = useState("");
+
+  // Keeps a newly created customer's code if prediction fails.
+  const [pendingCustomerCode, setPendingCustomerCode] = useState("");
+  const [pendingCustomerName, setPendingCustomerName] = useState("");
+
   const [tenureInput, setTenureInput] = useState(String(initialForm.tenure));
   const [monthlyChargesInput, setMonthlyChargesInput] = useState(
     String(initialForm.MonthlyCharges)
@@ -113,8 +128,33 @@ export default function PredictionForm() {
   );
 
   const [result, setResult] = useState<PredictionResult | null>(null);
+  const [linkedCustomerName, setLinkedCustomerName] = useState("");
+  const [linkedCustomerCode, setLinkedCustomerCode] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadCustomers() {
+      try {
+        setCustomersLoading(true);
+        setCustomersError(null);
+
+        const data = await getCustomers({ skip: 0, limit: 100 });
+        setCustomers(data);
+      } catch (err) {
+        setCustomersError(
+          err instanceof Error
+            ? err.message
+            : "Could not load existing customers."
+        );
+      } finally {
+        setCustomersLoading(false);
+      }
+    }
+
+    void loadCustomers();
+  }, []);
 
   function updateField(
     name: keyof CustomerPredictionInput,
@@ -144,24 +184,93 @@ export default function PredictionForm() {
       monthlyCharges < 0 ||
       totalCharges < 0
     ) {
-      setError("Please enter valid, non-negative numbers in all numeric fields. Tenure must be between 0 and 72 months.");
+      setError(
+        "Please enter valid, non-negative numbers in all numeric fields. Tenure must be between 0 and 72 months."
+      );
       return;
     }
 
-    const customer: CustomerPredictionInput = {
-      ...form,
-      tenure,
-      MonthlyCharges: monthlyCharges,
-      TotalCharges: totalCharges,
-    };
-
-    setLoading(true);
-    setError(null);
-    setResult(null);
+    let customerCode = "";
+    let customerRecord: Customer | undefined;
 
     try {
-      const data = (await predictCustomerChurn(customer)) as PredictionResult;
-      setResult(data);
+      setLoading(true);
+      setError(null);
+      setResult(null);
+
+      if (selectedCustomerId === "new") {
+        const trimmedName = customerName.trim();
+
+        if (!trimmedName) {
+          setError("Please enter the customer's name.");
+          setLoading(false);
+          return;
+        }
+
+        // Reuse the customer created by a previous failed prediction attempt.
+        if (
+          pendingCustomerCode &&
+          pendingCustomerName === trimmedName
+        ) {
+          customerCode = pendingCustomerCode;
+          customerRecord = customers.find(
+            (customer) => customer.customer_code === customerCode
+          );
+        } else {
+          customerRecord = await createCustomer({ name: trimmedName });
+
+          if (!customerRecord.customer_code) {
+            throw new Error(
+              "Customer was created, but the API did not return a customer code."
+            );
+          }
+
+          customerCode = customerRecord.customer_code;
+
+          setPendingCustomerCode(customerCode);
+          setPendingCustomerName(trimmedName);
+
+          setCustomers((current) => [
+            customerRecord!,
+            ...current.filter(
+              (item) => item.id !== customerRecord!.id
+            ),
+          ]);
+        }
+      } else {
+        customerRecord = customers.find(
+          (customer) => String(customer.id) === selectedCustomerId
+        );
+
+        if (!customerRecord?.customer_code) {
+          throw new Error(
+            "The selected customer could not be found. Please refresh the customer list."
+          );
+        }
+
+        customerCode = customerRecord.customer_code;
+      }
+
+      const payload: CustomerPredictionInput = {
+        ...form,
+        customer_code: customerCode,
+        tenure,
+        MonthlyCharges: monthlyCharges,
+        TotalCharges: totalCharges,
+      };
+
+      const data = await predictCustomerChurn(payload);
+
+      setResult(data as PredictionResult);
+      setLinkedCustomerName(customerRecord?.name || customerName.trim());
+      setLinkedCustomerCode(customerCode);
+
+      if (customerRecord) {
+        setSelectedCustomerId(String(customerRecord.id));
+      }
+
+      setPendingCustomerCode("");
+      setPendingCustomerName("");
     } catch (err) {
       console.error("Prediction request failed:", err);
       setError(
@@ -201,15 +310,78 @@ export default function PredictionForm() {
           <div className="prediction-section-heading">
             <span className="panel-label">CUSTOMER PROFILE</span>
             <h2>Customer Information</h2>
-            <p>Complete the fields below to run a prediction.</p>
+            <p>
+              Select an existing customer or create a new profile before
+              running a prediction.
+            </p>
           </div>
 
           <form onSubmit={handleSubmit}>
             <div className="prediction-form-grid">
+              <label className="prediction-field">
+                <span>Customer Profile</span>
+                <select
+                  value={selectedCustomerId}
+                  onChange={(event) => {
+                    setSelectedCustomerId(event.target.value);
+                    setError(null);
+                    setResult(null);
+                  }}
+                >
+                  <option value="new">+ Create New Customer</option>
+
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={String(customer.id)}>
+                      {customer.name || "Unnamed Customer"} —{" "}
+                      {customer.customer_code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {selectedCustomerId === "new" ? (
+                <label className="prediction-field">
+                  <span>Customer Name *</span>
+                  <input
+                    type="text"
+                    placeholder="Enter customer name"
+                    value={customerName}
+                    maxLength={150}
+                    required
+                    onChange={(event) => {
+                      setCustomerName(event.target.value);
+                      setError(null);
+                    }}
+                  />
+                </label>
+              ) : (
+                <div className="prediction-field">
+                  <span>Selected Customer</span>
+                  <div className="history-message">
+                    {customers.find(
+                      (customer) =>
+                        String(customer.id) === selectedCustomerId
+                    )?.customer_code || "Customer selected"}
+                  </div>
+                </div>
+              )}
+
+              {customersLoading && (
+                <p className="history-message">
+                  Loading existing customers...
+                </p>
+              )}
+
+              {customersError && (
+                <p className="history-message">
+                  Existing customers could not be loaded. You can still create
+                  a new customer.
+                </p>
+              )}
+
               {selectFields.map((field) => (
                 <label className="prediction-field" key={field.name}>
                   <span>{field.label}</span>
-
                   <select
                     value={String(form[field.name])}
                     onChange={(event) =>
@@ -306,6 +478,12 @@ export default function PredictionForm() {
           <span className="panel-label">MODEL RESULT</span>
           <h2>Prediction Results</h2>
 
+          <p className="history-message">
+            Customer: <strong>{linkedCustomerName || "Customer"}</strong>
+            {" · "}
+            Code: <strong>{linkedCustomerCode}</strong>
+          </p>
+
           <div className="prediction-result-grid">
             <article className="prediction-result-card">
               <span>Prediction</span>
@@ -348,6 +526,13 @@ export default function PredictionForm() {
               <strong>{result.risk_level}</strong>
             </article>
           </div>
+
+          <p className="history-message">
+            Prediction ID: #{result.id}
+            {result.customer_id
+              ? ` · Linked Customer ID: #${result.customer_id}`
+              : " · Warning: this prediction is not linked to a customer."}
+          </p>
 
           <button
             className="prediction-submit"

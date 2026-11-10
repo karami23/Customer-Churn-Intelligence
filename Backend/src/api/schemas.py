@@ -1,3 +1,4 @@
+
 from datetime import datetime
 from typing import Literal
 
@@ -12,6 +13,25 @@ from pydantic import (
 # ==================================================
 # Customer Schemas
 # ==================================================
+
+class CustomerCreate(BaseModel):
+
+    name: str = Field(
+        min_length=1,
+        max_length=150,
+    )
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Customer name cannot be empty.")
+
+        return value
+
 
 class CustomerData(BaseModel):
 
@@ -233,6 +253,8 @@ class CustomerListItem(BaseModel):
     )
 
     id: int
+
+    name: str | None
 
     customer_code: str | None
 

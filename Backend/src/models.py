@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -21,6 +22,11 @@ class Customer(Base):
         Integer,
         primary_key=True,
         index=True,
+    )
+
+    name: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
     )
 
     customer_code: Mapped[str | None] = mapped_column(
